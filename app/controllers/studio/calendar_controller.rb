@@ -4,7 +4,7 @@ module Studio
   class CalendarController < BaseController
     include QueriesHelper
 
-    before_action :find_optional_project
+    before_action :require_studio_login
     rescue_from Query::StatementInvalid, with: :query_statement_invalid
 
     def show
@@ -14,9 +14,10 @@ module Studio
       month = User.current.today.month if month <= 0 || month > 12
 
       calendar = Redmine::Helpers::Calendar.new(Date.civil(year, month, 1), current_language, :month)
-      retrieve_query
+      retrieve_query(IssueQuery, false)
       @query.group_by = nil
       @query.sort_criteria = nil
+      @query.add_filter('status_id', '*', [''])
 
       events = []
       if @query.valid?

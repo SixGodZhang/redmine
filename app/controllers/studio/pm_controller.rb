@@ -2,7 +2,7 @@
 
 module Studio
   class PmController < BaseController
-    before_action :authorize_global
+    before_action :require_studio_login
 
     def show
       project = Project.visible.find_by(id: params[:project_id]) if params[:project_id].present?

@@ -513,7 +513,7 @@ export function IssueDrawer({
         : Promise.resolve({ versions: [] }),
       api<{ issue_priorities: NamedOption[] }>('/enumerations/IssuePriority.json'),
       api<{ issue_statuses: NamedOption[] }>('/issue_statuses.json'),
-      api<{ users: Array<{ id: number; firstname: string; lastname: string }> }>('/users.json?limit=100').catch(() => ({ users: [] })),
+      api<{ users: Array<{ id: number; name: string }> }>('/studio/user_names').catch(() => ({ users: [] })),
       next.project?.id
         ? api<{ fields: Array<{ id: number; field_format: string }> }>(`/studio/issue_columns?project_id=${next.project.id}`).catch(() => ({ fields: [] }))
         : Promise.resolve({ fields: [] }),
@@ -536,7 +536,7 @@ export function IssueDrawer({
     setPriorities(priorityRes.issue_priorities ?? [])
     setStatusNames(Object.fromEntries((statusRes.issue_statuses ?? []).map((status) => [String(status.id), status.name])))
     const names: Record<string, string> = {}
-    for (const user of userRes.users ?? []) names[String(user.id)] = `${user.firstname} ${user.lastname}`.trim()
+    for (const user of userRes.users ?? []) names[String(user.id)] = user.name
     for (const user of people) names[String(user.id)] = user.name
     setUserNames(names)
     setFieldFormats(Object.fromEntries((columnRes.fields ?? []).map((field) => [field.id, field.field_format])))

@@ -32,17 +32,31 @@ export function CalendarPage() {
   const [cursor, setCursor] = useState(new Date())
   const [events, setEvents] = useState<CalEvent[]>([])
   const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [detail, setDetail] = useState<{ day: Date; x: number; y: number } | null>(null)
 
   const year = cursor.getFullYear()
   const month = cursor.getMonth() + 1
 
   useEffect(() => {
+    let cancelled = false
     setLoading(true)
-    void api<{ events: CalEvent[] }>(`/studio/calendar?year=${year}&month=${month}`).then((res) => {
-      setEvents(res.events ?? [])
-      setLoading(false)
-    })
+    setError(null)
+    void api<{ events: CalEvent[] }>(`/studio/calendar?year=${year}&month=${month}`)
+      .then((res) => {
+        if (cancelled) return
+        setEvents(res.events ?? [])
+        setLoading(false)
+      })
+      .catch((err: Error) => {
+        if (cancelled) return
+        setEvents([])
+        setError(err.message || '日历加载失败')
+        setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
   }, [year, month])
 
   const days = useMemo(() => {
@@ -91,6 +105,7 @@ export function CalendarPage() {
           </div>
         }
       />
+      {error ? <p className="mb-4 text-sm text-red-600">{error}</p> : null}
       <Card className="overflow-hidden">
         <div className="grid grid-cols-7 border-b border-gray-100 bg-gray-50 text-center text-xs font-medium text-gray-500">
           {['一', '二', '三', '四', '五', '六', '日'].map((d) => (

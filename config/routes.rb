@@ -478,6 +478,7 @@ Rails.application.routes.draw do
     delete 'enumerations/:id', to: 'enumerations#destroy'
     get 'role_permissions', to: 'roles#permission_catalog'
     get 'issue_columns', to: 'custom_fields#columns'
+    get 'user_names', to: 'custom_fields#user_names'
     get 'issue_fields', to: 'custom_fields#issue_form'
     get 'custom_fields', to: 'custom_fields#index'
     post 'custom_fields', to: 'custom_fields#create'

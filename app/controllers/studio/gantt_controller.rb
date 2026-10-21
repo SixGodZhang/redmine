@@ -4,7 +4,7 @@ module Studio
   class GanttController < BaseController
     include QueriesHelper
 
-    before_action :authorize_global
+    before_action :require_studio_login
     rescue_from Query::StatementInvalid, with: :query_statement_invalid
 
     def show

@@ -305,9 +305,9 @@ export function IssueTable({
 
   useEffect(() => {
     if (!customColumns.some((column) => column.format === 'user')) return
-    void api<{ users: Array<{ id: number; firstname: string; lastname: string }> }>('/users.json?limit=100').then((res) => {
+    void api<{ users: Array<{ id: number; name: string }> }>('/studio/user_names').then((res) => {
       const names: Record<string, string> = {}
-      for (const user of res.users ?? []) names[String(user.id)] = `${user.firstname} ${user.lastname}`.trim()
+      for (const user of res.users ?? []) names[String(user.id)] = user.name
       setUserNames(names)
     }).catch(() => setUserNames({}))
   }, [customColumns])

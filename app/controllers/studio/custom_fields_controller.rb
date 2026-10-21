@@ -2,8 +2,8 @@
 
 module Studio
   class CustomFieldsController < BaseController
-    before_action :require_admin, except: [:issue_form, :columns]
-    before_action :require_studio_login, only: [:issue_form, :columns]
+    before_action :require_admin, except: [:issue_form, :columns, :user_names]
+    before_action :require_studio_login, only: [:issue_form, :columns, :user_names]
     before_action :find_custom_field, only: [:update, :destroy]
 
     TYPES = {
@@ -52,6 +52,18 @@ module Studio
       else
         render json: { errors: @field.errors.full_messages }, status: :unprocessable_entity
       end
+    end
+
+    def user_names
+      issue_ids = Issue.visible.select(:id)
+      field_ids = CustomField.where(type: 'IssueCustomField', field_format: 'user').select(:id)
+      raw_ids = CustomValue.where(customized_type: 'Issue', customized_id: issue_ids, custom_field_id: field_ids).where.not(value: [nil, '']).distinct.pluck(:value)
+      ids = raw_ids.filter_map { |value| Integer(value, exception: false) }
+      ids |= Issue.visible.where.not(assigned_to_id: nil).distinct.pluck(:assigned_to_id)
+      ids |= Issue.visible.distinct.pluck(:author_id)
+      ids << User.current.id
+      users = User.where(id: ids.compact.uniq).order(:id)
+      render json: { users: users.map { |user| { id: user.id, name: user.name } } }
     end
 
     def columns
