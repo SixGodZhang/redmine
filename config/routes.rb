@@ -146,8 +146,8 @@ Rails.application.routes.draw do
   get 'watchers/autocomplete_for_mention', to: 'watchers#autocomplete_for_mention', via: [:get]
   get 'watchers/autocomplete_for_user', :to => 'watchers#autocomplete_for_user'
   # Specific routes for issue watchers API
-  post 'issues/:object_id/watchers', :to => 'watchers#create', :object_type => 'issue'
-  delete 'issues/:object_id/watchers/:user_id' => 'watchers#destroy', :object_type => 'issue'
+  post 'issues/:object_id/watchers(.:format)', :to => 'watchers#create', :object_type => 'issue'
+  delete 'issues/:object_id/watchers/:user_id(.:format)' => 'watchers#destroy', :object_type => 'issue'
 
   resources :projects do
     collection do
@@ -446,6 +446,50 @@ Rails.application.routes.draw do
   # Reveal health status on /up that returns 200 if the app boots with no exceptions, otherwise 500.
   # Can be used by load balancers and uptime monitors to verify that the app is live.
   get "up" => "rails/health#show", :as => :rails_health_check
+
+  namespace :studio do
+    resource :session, only: [:show, :create, :destroy], controller: 'auth'
+    get 'workflows', to: 'workflows#index'
+    get 'workflows/edit', to: 'workflows#edit'
+    patch 'workflows', to: 'workflows#update'
+    get 'workflows/permissions', to: 'workflows#permissions'
+    patch 'workflows/permissions', to: 'workflows#update_permissions'
+    get 'gantt', to: 'gantt#show'
+    get 'calendar', to: 'calendar#show'
+    get 'pm', to: 'pm#show'
+    get 'settings', to: 'settings#show'
+    patch 'settings', to: 'settings#update'
+    get 'projects/:project_id/versions', to: 'versions#index'
+    post 'projects/:project_id/versions', to: 'versions#create'
+    delete 'projects/:project_id/versions/:id', to: 'versions#destroy'
+    get 'projects/:project_id/boards', to: 'boards#index'
+    get 'projects/:project_id/boards/:id', to: 'boards#show'
+    post 'trackers', to: 'trackers#create'
+    patch 'trackers/:id', to: 'trackers#update'
+    delete 'trackers/:id', to: 'trackers#destroy'
+    patch 'issue_statuses/reorder', to: 'issue_statuses#reorder'
+    post 'issue_statuses', to: 'issue_statuses#create'
+    patch 'issue_statuses/:id', to: 'issue_statuses#update'
+    delete 'issue_statuses/:id', to: 'issue_statuses#destroy'
+    get 'enumerations', to: 'enumerations#index'
+    patch 'enumerations/reorder', to: 'enumerations#reorder'
+    post 'enumerations', to: 'enumerations#create'
+    patch 'enumerations/:id', to: 'enumerations#update'
+    delete 'enumerations/:id', to: 'enumerations#destroy'
+    get 'role_permissions', to: 'roles#permission_catalog'
+    get 'issue_columns', to: 'custom_fields#columns'
+    get 'issue_fields', to: 'custom_fields#issue_form'
+    get 'custom_fields', to: 'custom_fields#index'
+    post 'custom_fields', to: 'custom_fields#create'
+    patch 'custom_fields/:id', to: 'custom_fields#update'
+    delete 'custom_fields/:id', to: 'custom_fields#destroy'
+    post 'roles', to: 'roles#create'
+    patch 'roles/:id', to: 'roles#update'
+    delete 'roles/:id', to: 'roles#destroy'
+  end
+
+  get '/app', to: 'studio/spa#index'
+  get '/app/*path', to: 'studio/spa#index'
 
   Redmine::Plugin.directory.glob("*/config/routes.rb").sort.each do |plugin_routes_path|
     instance_eval(plugin_routes_path.read, plugin_routes_path.to_s)

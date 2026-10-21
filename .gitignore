@@ -46,4 +46,6 @@
 /Gemfile.local
 
 /node_modules
+/frontend/node_modules
+/vendor/bundle
 yarn-error.log

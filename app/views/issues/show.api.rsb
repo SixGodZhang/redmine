@@ -83,6 +83,9 @@ api.issue do
     end
   end if include_in_api_response?('watchers') && User.current.allowed_to?(:view_issue_watchers, @issue.project)
 
+  api.attributes_editable @issue.attributes_editable?
+  api.notes_addable @issue.notes_addable?
+
   api.array :allowed_statuses do
     @allowed_statuses.each do |status|
       api.status :id => status.id, :name => status.name, :is_closed => status.is_closed
