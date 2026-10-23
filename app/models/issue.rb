@@ -79,7 +79,7 @@ class Issue < ApplicationRecord
   validates :estimated_hours, :numericality => {:greater_than_or_equal_to => 0, :allow_nil => true, :message => :invalid}
   validates :start_date, :date => true
   validates :due_date, :date => true
-  validate :validate_issue, :validate_required_fields, :validate_permissions
+  validate :validate_issue, :validate_required_fields, :validate_permissions, :validate_studio_project_catalog
 
   scope :visible, (lambda do |*args|
     joins(:project).
@@ -1091,6 +1091,19 @@ class Issue < ApplicationRecord
     tracker.try(:default_status)
   end
 
+  def validate_studio_project_catalog
+    return unless project_id
+
+    status_ids = ProjectIssueStatus.where(:project_id => project_id).pluck(:issue_status_id)
+    if status_ids.any? && status_id.present? && !status_ids.include?(status_id)
+      errors.add :status_id, :inclusion
+    end
+    priority_ids = ProjectIssuePriority.where(:project_id => project_id).pluck(:issue_priority_id)
+    if priority_ids.any? && priority_id.present? && !priority_ids.include?(priority_id)
+      errors.add :priority_id, :inclusion
+    end
+  end
+
   # Returns an array of statuses that user is able to apply
   def new_statuses_allowed_to(user=User.current, include_default=false)
     initial_status = nil
@@ -1118,12 +1131,19 @@ class Issue < ApplicationRecord
       roles_for_workflow(user),
       tracker,
       author == user,
-      assignee_transitions_allowed
+      assignee_transitions_allowed,
+      project
     )
     statuses << initial_status unless statuses.empty?
     statuses << default_status if include_default || (new_record? && statuses.empty?)
 
     statuses = statuses.compact.uniq.sort
+    if project
+      enabled_status_ids = ProjectIssueStatus.where(:project_id => project.id).pluck(:issue_status_id)
+      if enabled_status_ids.any?
+        statuses.select! {|status| enabled_status_ids.include?(status.id) || status == initial_status}
+      end
+    end
     unless closable?
       # cannot close a blocked issue or a parent with open subtasks
       statuses.reject!(&:is_closed?)

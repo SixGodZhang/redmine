@@ -111,6 +111,7 @@ export type Issue = {
   total_estimated_hours?: number | null
   spent_hours?: number | null
   total_spent_hours?: number | null
+  deletable?: boolean
 }
 
 export type Project = {

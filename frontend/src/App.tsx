@@ -20,10 +20,12 @@ import {
   ProjectTimePage,
   ProjectWikiPage,
 } from './pages/project/ProjectPages'
+import { ProjectSettingsPage } from './pages/project/ProjectSettingsPage'
 import { SearchPage } from './pages/SearchPage'
 import { GanttPage } from './pages/GanttPage'
 import { CalendarPage } from './pages/CalendarPage'
 import { PmPage } from './pages/PmPage'
+import { KanbanPage } from './pages/KanbanPage'
 import {
   AdminCustomFieldsPage,
   AdminEnumerationsPage,
@@ -67,6 +69,7 @@ export default function App() {
             <Route index element={<Navigate to="issues" replace />} />
             <Route path="overview" element={<ProjectOverviewPage />} />
             <Route path="issues" element={<ProjectIssuesPage />} />
+            <Route path="settings" element={<ProjectSettingsPage />} />
             <Route path="versions" element={<ProjectVersionsPage />} />
             <Route path="wiki" element={<ProjectWikiPage />} />
             <Route path="news" element={<ProjectNewsPage />} />
@@ -83,6 +86,7 @@ export default function App() {
           <Route path="gantt" element={<GanttPage />} />
           <Route path="calendar" element={<CalendarPage />} />
           <Route path="pm" element={<PmPage />} />
+          <Route path="kanban" element={<KanbanPage />} />
           <Route path="admin/users" element={<AdminUsersPage />} />
           <Route path="admin/groups" element={<AdminGroupsPage />} />
           <Route path="admin/roles" element={<AdminRolesPage />} />

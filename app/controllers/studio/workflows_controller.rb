@@ -17,7 +17,7 @@ module Studio
     def edit
       return render json: { errors: ['请选择跟踪标签与角色'] }, status: :unprocessable_entity unless @trackers && @roles && @statuses.any?
 
-      workflows = WorkflowTransition.where(role_id: @roles.map(&:id), tracker_id: @trackers.map(&:id))
+      workflows = WorkflowTransition.where(role_id: @roles.map(&:id), tracker_id: @trackers.map(&:id), project_id: params[:project_id].presence)
                                     .preload(:old_status, :new_status)
       grouped = {
         always: workflows.select { |w| !w.author && !w.assignee },
@@ -39,7 +39,7 @@ module Studio
             by_rule.reject! { |_rule, val| val == 'no_change' }
           end
         end
-        WorkflowTransition.replace_transitions(@trackers, @roles, transitions)
+        WorkflowTransition.replace_transitions(@trackers, @roles, transitions, params[:project_id].presence)
         render json: { ok: true }
       else
         render json: { errors: ['参数不完整'] }, status: :unprocessable_entity
@@ -111,7 +111,7 @@ module Studio
       used_only = params[:used_statuses_only] != '0'
       if @trackers && used_only
         role_ids = Role.all.select(&:consider_workflow?).map(&:id)
-        status_ids = WorkflowTransition.where(tracker_id: @trackers.map(&:id), role_id: role_ids)
+        status_ids = WorkflowTransition.where(tracker_id: @trackers.map(&:id), role_id: role_ids, project_id: params[:project_id].presence)
                                        .where('old_status_id <> new_status_id')
                                        .distinct.pluck(:old_status_id, :new_status_id).flatten.uniq
         IssueStatus.where(id: status_ids).sorted.to_a.presence

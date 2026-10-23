@@ -61,13 +61,18 @@ class IssueStatus < ApplicationRecord
   end
   alias :find_new_statuses_allowed_to :new_statuses_allowed_to
 
-  def self.new_statuses_allowed(status, roles, tracker, author=false, assignee=false)
+  def self.new_statuses_allowed(status, roles, tracker, author=false, assignee=false, project=nil)
     if roles.present? && tracker
       status_id = status.try(:id) || 0
 
       scope = IssueStatus.
         joins(:workflow_transitions_as_new_status).
         where(:workflows => {:old_status_id => status_id, :role_id => roles.map(&:id), :tracker_id => tracker.id})
+      if project && WorkflowRule.where(:project_id => project.id, :tracker_id => tracker.id).exists?
+        scope = scope.where(:workflows => {:project_id => project.id})
+      else
+        scope = scope.where(:workflows => {:project_id => nil})
+      end
 
       unless author && assignee
         if author || assignee

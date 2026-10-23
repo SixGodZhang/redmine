@@ -20,15 +20,16 @@
 class WorkflowTransition < WorkflowRule
   validates_presence_of :new_status
 
-  def self.replace_transitions(trackers, roles, transitions)
+  def self.replace_transitions(trackers, roles, transitions, project_id=nil)
     trackers = Array.wrap trackers
     roles = Array.wrap roles
 
     transaction do
+      scope = WorkflowTransition.where(:tracker_id => trackers.map(&:id), :role_id => roles.map(&:id))
+      scope = project_id ? scope.where(:project_id => project_id) : scope.where(:project_id => nil)
       records_by_status_and_scope =
-        WorkflowTransition.where(:tracker_id => trackers.map(&:id), :role_id => roles.map(&:id))
-                          .to_a
-                          .group_by {|r| [r.old_status_id, r.new_status_id, r.tracker_id, r.role_id]}
+        scope.to_a
+             .group_by {|r| [r.old_status_id, r.new_status_id, r.tracker_id, r.role_id]}
 
       transitions.each do |old_status_id, transitions_by_new_status|
         transitions_by_new_status.each do |new_status_id, transition_by_rule|
@@ -57,7 +58,8 @@ class WorkflowTransition < WorkflowRule
                             :old_status_id => old_status_id,
                             :new_status_id => new_status_id,
                             :tracker => tracker,
-                            :role => role
+                            :role => role,
+                            :project_id => project_id
                           )
                     records_by_status_and_scope[key] ||= []
                     records_by_status_and_scope[key] << w

@@ -147,10 +147,20 @@ export function CustomFieldControl({
   )
 }
 
-type IssueFormRequest = { mode: 'create'; projectId?: string } | { mode: 'edit'; id: string }
+export type IssueCreatePreset = Partial<
+  Pick<FormState, 'tracker_id' | 'subject' | 'description' | 'priority_id' | 'assigned_to_id' | 'fixed_version_id' | 'start_date' | 'due_date'>
+>
+
+export type IssueCreateOptions = {
+  projectId?: string
+  parentIssueId?: string
+  preset?: IssueCreatePreset
+}
+
+type IssueFormRequest = ({ mode: 'create' } & IssueCreateOptions) | { mode: 'edit'; id: string }
 
 const IssueFormContext = createContext<{
-  openCreate: (projectId?: string) => void
+  openCreate: (projectIdOrOptions?: string | IssueCreateOptions) => void
   openEdit: (id: string) => void
   savedTick: number
 } | null>(null)
@@ -164,7 +174,10 @@ export function useIssueForm() {
 export function IssueFormProvider({ children }: { children: ReactNode }) {
   const [request, setRequest] = useState<IssueFormRequest | null>(null)
   const [savedTick, setSavedTick] = useState(0)
-  const openCreate = useCallback((projectId?: string) => setRequest({ mode: 'create', projectId }), [])
+  const openCreate = useCallback((projectIdOrOptions?: string | IssueCreateOptions) => {
+    const options = typeof projectIdOrOptions === 'string' || projectIdOrOptions == null ? { projectId: projectIdOrOptions } : projectIdOrOptions
+    setRequest({ mode: 'create', ...options })
+  }, [])
   const openEdit = useCallback((id: string) => setRequest({ mode: 'edit', id }), [])
   return (
     <IssueFormContext.Provider
@@ -179,6 +192,8 @@ export function IssueFormProvider({ children }: { children: ReactNode }) {
         open={request !== null}
         issueId={request?.mode === 'edit' ? request.id : undefined}
         projectId={request?.mode === 'create' ? request.projectId : undefined}
+        parentIssueId={request?.mode === 'create' ? request.parentIssueId : undefined}
+        preset={request?.mode === 'create' ? request.preset : undefined}
         onClose={() => setRequest(null)}
         onSaved={() => {
           setSavedTick((value) => value + 1)
@@ -206,12 +221,16 @@ function IssueFormDialog({
   open,
   issueId,
   projectId,
+  parentIssueId,
+  preset,
   onClose,
   onSaved,
 }: {
   open: boolean
   issueId?: string
   projectId?: string
+  parentIssueId?: string
+  preset?: IssueCreatePreset
   onClose: () => void
   onSaved: (issueId: string) => void
 }) {
@@ -313,17 +332,30 @@ function IssueFormDialog({
         const selectedProject = presetProject && projectList.some((p) => String(p.id) === presetProject)
           ? presetProject
           : String(projectList[0]?.id ?? '')
+        const trackerId = preset?.tracker_id && trackerList.some((tracker) => String(tracker.id) === preset.tracker_id)
+          ? preset.tracker_id
+          : String(trackerList[0]?.id ?? '')
+        const priorityId = preset?.priority_id && priorityList.some((priority) => String(priority.id) === preset.priority_id)
+          ? preset.priority_id
+          : String(priorityList.find((p) => p.is_default)?.id ?? priorityList[0]?.id ?? '')
         setForm({
           ...emptyForm,
           project_id: selectedProject,
-          tracker_id: String(trackerList[0]?.id ?? ''),
+          tracker_id: trackerId,
           status_id: String(statusList.find((s) => s.name === '新建')?.id ?? statusList[0]?.id ?? ''),
-          priority_id: String(priorityList.find((p) => p.is_default)?.id ?? priorityList[0]?.id ?? ''),
+          priority_id: priorityId,
+          subject: preset?.subject ?? '',
+          description: preset?.description ?? '',
+          assigned_to_id: preset?.assigned_to_id ?? '',
+          fixed_version_id: preset?.fixed_version_id ?? '',
+          start_date: preset?.start_date ?? '',
+          due_date: preset?.due_date ?? '',
+          parent_issue_id: parentIssueId ?? '',
         })
       }
       setLoading(false)
     })()
-  }, [editing, issueId, open, projectId])
+  }, [editing, issueId, open, parentIssueId, preset, projectId])
 
   useEffect(() => {
     if (!form.project_id) return
@@ -403,7 +435,7 @@ function IssueFormDialog({
       <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
       <div className="fixed inset-0 flex items-center justify-center p-4">
         <DialogPanel className="max-h-[92vh] w-[min(1100px,100%)] overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
-          <DialogTitle className="mb-4 text-lg font-semibold text-gray-900">{editing ? '编辑工单' : '新建工单'}</DialogTitle>
+          <DialogTitle className="mb-4 text-lg font-semibold text-gray-900">{editing ? '编辑工单' : parentIssueId ? '新建子单' : '新建工单'}</DialogTitle>
           {loading ? (
             <Spinner />
           ) : (
@@ -412,7 +444,7 @@ function IssueFormDialog({
             <Field label="项目" required>
               <Select
                 value={form.project_id}
-                disabled={editing}
+                disabled={editing || Boolean(parentIssueId)}
                 required
                 onChange={(e) => patch({ project_id: e.target.value, assigned_to_id: '', fixed_version_id: '' })}
               >
@@ -481,6 +513,7 @@ function IssueFormDialog({
                   inputMode="numeric"
                   placeholder="父工单编号"
                   value={form.parent_issue_id}
+                  disabled={Boolean(parentIssueId)}
                   onChange={(e) => patch({ parent_issue_id: e.target.value.replace(/\D/g, '') })}
                 />
               </Field>

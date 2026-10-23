@@ -2,6 +2,7 @@ import { Dialog, DialogPanel, Transition, TransitionChild } from '@headlessui/re
 import {
   CalendarDays,
   ChartColumn,
+  Columns3,
   FolderKanban,
   GanttChartSquare,
   LayoutDashboard,
@@ -29,6 +30,7 @@ const nav = [
   { to: '/', label: '工作台', icon: LayoutDashboard },
   { to: '/projects', label: '项目', icon: FolderKanban },
   { to: '/issues', label: '工单', icon: FileText },
+  { to: '/kanban', label: '看板', icon: Columns3 },
   { to: '/gantt', label: '甘特图', icon: GanttChartSquare },
   { to: '/calendar', label: '日历', icon: CalendarDays },
   { to: '/pm', label: 'PM', icon: ChartColumn },
@@ -208,6 +210,7 @@ function AppShellLayout() {
 export const projectTabs = [
   { slug: 'overview', label: '概述', icon: LayoutDashboard },
   { slug: 'issues', label: '工单', icon: FileText },
+  { slug: 'settings', label: '配置', icon: Settings },
   { slug: 'versions', label: '目标版本', icon: Settings },
   { slug: 'wiki', label: 'Wiki', icon: BookOpen },
   { slug: 'news', label: '新闻', icon: Newspaper },

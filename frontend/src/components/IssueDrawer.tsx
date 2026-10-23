@@ -1,11 +1,12 @@
-import { Dialog, DialogPanel, Transition, TransitionChild } from '@headlessui/react'
-import { Bold, Check, ChevronLeft, ChevronRight, Code, Heading2, Image, Italic, Link2, List, ListOrdered, Quote, Strikethrough, X } from 'lucide-react'
+import { Dialog, DialogPanel, DialogTitle, Transition, TransitionChild } from '@headlessui/react'
+import { Bold, Check, ChevronLeft, ChevronRight, Code, Files, Heading2, Image, Italic, Link2, List, ListOrdered, ListPlus, Plus, Quote, Strikethrough, X } from 'lucide-react'
 import { Fragment, useEffect, useRef, useState, type ClipboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { Link } from 'react-router-dom'
 import { api, getApiKey, type Issue } from '../lib/api'
-import { Input, Select, Spinner, StatusBadge, Textarea } from './ui'
-import { CustomFieldControl, defaultFieldValue, type IssueCustomField } from '../pages/issues/IssueFormPage'
+import { useConfirm } from './ConfirmDialog'
+import { Button, Input, Select, Spinner, StatusBadge, Textarea } from './ui'
+import { CustomFieldControl, defaultFieldValue, useIssueForm, type IssueCustomField } from '../pages/issues/IssueFormPage'
 
 type JournalDetail = { property: string; name: string; old_value?: string | null; new_value?: string | null }
 type Journal = {
@@ -24,6 +25,15 @@ type Attachment = {
   thumbnail_url?: string
 }
 type Child = { id: number; subject: string; tracker?: { name: string } }
+type IssueTemplateRow = {
+  id: number
+  name: string
+  subject: string
+  description: string
+  tracker_id: number
+  tracker_name?: string
+  priority_id: number | null
+}
 type CustomField = { id: number; name: string; value?: string | string[] | null }
 type Relation = { id: number; issue_id: number; issue_to_id: number; relation_type: string }
 type Watcher = { id: number; name: string }
@@ -78,6 +88,8 @@ const ATTR_LABEL: Record<string, string> = {
   project_id: '项目',
   is_private: '私有',
 }
+
+const PICK_PAGE_SIZE = 10
 
 const RELATION_LABEL: Record<string, string> = {
   relates: '关联到',
@@ -441,7 +453,10 @@ export function IssueDrawer({
   onUpdated?: () => void
   layout?: 'drawer' | 'page'
 }) {
+  const { openCreate, savedTick } = useIssueForm()
+  const { confirm, dialog: confirmDialog } = useConfirm()
   const [issue, setIssue] = useState<IssueDetail | null>(null)
+  const [deleting, setDeleting] = useState(false)
   const [note, setNote] = useState('')
   const [savingNote, setSavingNote] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -458,6 +473,21 @@ export function IssueDrawer({
   const editRef = useRef<EditState | null>(null)
   const pasting = useRef(false)
   const [editingDescription, setEditingDescription] = useState(false)
+  const [detailTab, setDetailTab] = useState<'description' | 'attachments' | 'children' | 'relations' | 'activity' | 'watchers'>('description')
+  const [childTool, setChildTool] = useState<null | 'pick' | 'template'>(null)
+  const [pickQuery, setPickQuery] = useState('')
+  const [pickPage, setPickPage] = useState(0)
+  const [pickTotal, setPickTotal] = useState(0)
+  const [pickIssues, setPickIssues] = useState<Issue[]>([])
+  const [pickSelected, setPickSelected] = useState<number[]>([])
+  const [pickLoading, setPickLoading] = useState(false)
+  const [pickError, setPickError] = useState<string | null>(null)
+  const [pickSaving, setPickSaving] = useState(false)
+  const [templates, setTemplates] = useState<IssueTemplateRow[]>([])
+  const [templatesLoading, setTemplatesLoading] = useState(false)
+  const [templateError, setTemplateError] = useState<string | null>(null)
+  const [templateSaving, setTemplateSaving] = useState(false)
+  const [templateForm, setTemplateForm] = useState({ name: '', subject: '', description: '', tracker_id: '', priority_id: '' })
   const descriptionRef = useRef<HTMLTextAreaElement>(null)
   const descriptionBaseline = useRef('')
   const [toast, setToast] = useState<string | null>(null)
@@ -504,7 +534,7 @@ export function IssueDrawer({
           `/studio/issue_fields?project_id=${next.project.id}&tracker_id=${next.tracker.id}&issue_id=${next.id}`,
         ).catch(() => ({ fields: [] as IssueCustomField[] }))
       : Promise.resolve({ fields: [] as IssueCustomField[] })
-    const [memberRes, versionRes, priorityRes, statusRes, userRes, columnRes, trackerRes, fieldRes] = await Promise.all([
+    const [memberRes, versionRes, priorityRes, statusRes, userRes, columnRes, trackerRes, fieldRes, configRes] = await Promise.all([
       next.project?.id
         ? api<{ memberships: Array<{ user?: NamedOption }> }>(`/projects/${next.project.id}/memberships.json`)
         : Promise.resolve({ memberships: [] }),
@@ -519,6 +549,9 @@ export function IssueDrawer({
         : Promise.resolve({ fields: [] }),
       api<{ trackers: NamedOption[] }>('/trackers.json').catch(() => ({ trackers: [] })),
       fieldQuery,
+      next.project?.id
+        ? api<{ priorities: Array<{ id: number; enabled: boolean }>; trackers: Array<{ id: number; enabled: boolean }> }>(`/studio/projects/${next.project.id}/configuration`).catch(() => null)
+        : Promise.resolve(null),
     ])
     const people = (memberRes.memberships ?? []).flatMap((item) => (item.user ? [item.user] : []))
     if (next.assigned_to && !people.some((user) => user.id === next.assigned_to?.id)) {
@@ -530,10 +563,14 @@ export function IssueDrawer({
     setCustomFieldDefs(fields)
     setEdit(nextEdit)
     savedKey.current = editKey(nextEdit)
-    setTrackers(trackerRes.trackers ?? [])
+    const enabledTrackers = new Set((configRes?.trackers ?? []).filter((item) => item.enabled).map((item) => item.id))
+    const trackerList = trackerRes.trackers ?? []
+    setTrackers(enabledTrackers.size ? trackerList.filter((item) => enabledTrackers.has(item.id) || item.id === next.tracker?.id) : trackerList)
     setAssignees(people)
     setVersions(versionRes.versions ?? [])
-    setPriorities(priorityRes.issue_priorities ?? [])
+    const enabledPriorities = new Set((configRes?.priorities ?? []).filter((item) => item.enabled).map((item) => item.id))
+    const priorityList = priorityRes.issue_priorities ?? []
+    setPriorities(enabledPriorities.size && configRes?.priorities?.some((item) => !item.enabled) ? priorityList.filter((item) => enabledPriorities.has(item.id) || item.id === next.priority?.id) : priorityList)
     setStatusNames(Object.fromEntries((statusRes.issue_statuses ?? []).map((status) => [String(status.id), status.name])))
     const names: Record<string, string> = {}
     for (const user of userRes.users ?? []) names[String(user.id)] = user.name
@@ -549,9 +586,65 @@ export function IssueDrawer({
     }
     setNote('')
     setEditingDescription(false)
+    setDetailTab('description')
+    setChildTool(null)
     setPreviewIndex(null)
     void load(issueId).catch((e: Error) => setError(e.message))
   }, [issueId])
+
+  const savedTickSeen = useRef<number | null>(null)
+  useEffect(() => {
+    if (savedTickSeen.current === null) {
+      savedTickSeen.current = savedTick
+      return
+    }
+    if (savedTickSeen.current === savedTick || !issueId) return
+    savedTickSeen.current = savedTick
+    void load(issueId)
+      .then(() => onUpdated?.())
+      .catch((e: Error) => setError(e.message))
+  }, [issueId, onUpdated, savedTick])
+
+  useEffect(() => {
+    if (childTool !== 'pick' || !issue?.project?.id) return
+    const projectId = issue.project.id
+    const currentId = issue.id
+    const skip = new Set<number>([currentId, ...(issue.parent?.id ? [issue.parent.id] : []), ...(issue.children ?? []).map((child) => child.id)])
+    const handle = window.setTimeout(() => {
+      const params = new URLSearchParams({
+        project_id: String(projectId),
+        status_id: '*',
+        limit: String(PICK_PAGE_SIZE),
+        offset: String(pickPage * PICK_PAGE_SIZE),
+        sort: 'updated_on:desc',
+      })
+      const query = pickQuery.trim()
+      if (/^\d+$/.test(query)) params.set('issue_id', query)
+      else if (query) params.set('subject', `~${query.replace(/\|/g, '')}`)
+      setPickLoading(true)
+      setPickError(null)
+      void api<{ issues: Issue[]; total_count?: number }>(`/issues.json?${params}`)
+        .then((res) => {
+          const issues = (res.issues ?? []).filter((item) => !skip.has(item.id))
+          setPickIssues(issues)
+          setPickTotal(res.total_count ?? issues.length)
+        })
+        .catch((err) => setPickError(err instanceof Error ? err.message : '搜索失败'))
+        .finally(() => setPickLoading(false))
+    }, 250)
+    return () => window.clearTimeout(handle)
+  }, [childTool, issue, pickPage, pickQuery])
+
+  useEffect(() => {
+    if (childTool !== 'template' || !issue?.project?.id) return
+    const projectId = issue.project.id
+    setTemplatesLoading(true)
+    setTemplateError(null)
+    void api<{ templates: IssueTemplateRow[] }>(`/studio/issue_templates?project_id=${projectId}`)
+      .then((res) => setTemplates(res.templates ?? []))
+      .catch((err) => setTemplateError(err instanceof Error ? err.message : '模板加载失败'))
+      .finally(() => setTemplatesLoading(false))
+  }, [childTool, issue?.project?.id])
 
   const open = issueId !== null
 
@@ -808,6 +901,37 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
                         </h2>
                       )}
                     </div>
+                    {issue.deletable ? (
+                      <button
+                        type="button"
+                        className="shrink-0 text-sm text-red-600 hover:text-red-800 disabled:opacity-50"
+                        disabled={deleting}
+                        onClick={() => {
+                          if (!issueId) return
+                          const notes = ['删除后不能恢复。']
+                          if ((issue.children?.length ?? 0) > 0) notes.push('下面的子单会一起删除。')
+                          if ((issue.total_spent_hours ?? 0) > 0) notes.push(`已登记的 ${issue.total_spent_hours} 小时会一起删除。`)
+                          void confirm({
+                            title: `删除 #${issue.id}`,
+                            description: `确定删除「${issue.subject}」？${notes.join('')}`,
+                          }).then((ok) => {
+                            if (!ok) return
+                            setDeleting(true)
+                            void api(`/issues/${issueId}.json`, { method: 'DELETE' })
+                              .then(() => {
+                                onUpdated?.()
+                                onClose()
+                              })
+                              .catch((err) => {
+                                flash(err instanceof Error ? err.message : '删除失败')
+                                setDeleting(false)
+                              })
+                          })
+                        }}
+                      >
+                        {deleting ? '删除中…' : '删除'}
+                      </button>
+                    ) : null}
                     {layout === 'drawer' ? (
                       <button type="button" className="rounded-lg p-1 text-gray-500 hover:bg-gray-100" onClick={onClose}>
                         <X className="h-5 w-5" />
@@ -823,8 +947,32 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
                     style={{ ['--issue-sidebar' as string]: `${sidebarWidth}px` }}
                   >
                     <div className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
-                      <section className="mb-6">
-                        <h3 className="mb-2 text-sm font-semibold text-gray-900">描述</h3>
+                      <div className="mb-4 flex gap-1 overflow-x-auto border-b border-gray-200">
+                        {(
+                          [
+                            ['description', '描述'],
+                            ['attachments', `附件(${issue.attachments?.length ?? 0})`],
+                            ['children', `子单(${issue.children?.length ?? 0})`],
+                            ['relations', `关联单(${issue.relations?.length ?? 0})`],
+                            ['activity', '活动'],
+                            ['watchers', `跟踪者(${issue.watchers?.length ?? 0})`],
+                          ] as const
+                        ).map(([id, label]) => (
+                          <button
+                            key={id}
+                            type="button"
+                            className={[
+                              '-mb-px shrink-0 border-b-2 px-3 py-2 text-sm',
+                              detailTab === id ? 'border-blue-600 font-medium text-blue-700' : 'border-transparent text-gray-600 hover:text-gray-900',
+                            ].join(' ')}
+                            onClick={() => setDetailTab(id)}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                      {detailTab === 'description' ? (
+                        <>
                         {issue.attributes_editable && edit ? (
                           editingDescription ? (
                             <div className="overflow-hidden rounded-lg border border-gray-200">
@@ -938,11 +1086,13 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
                         ) : (
                           <p className="text-sm text-gray-400">（无描述）</p>
                         )}
-                      </section>
+                        </>
+                      ) : null}
 
-                      {(issue.attachments ?? []).length > 0 ? (
-                        <section className="mb-6">
-                          <h3 className="mb-2 text-sm font-semibold text-gray-900">附件 ({issue.attachments?.length})</h3>
+                      {detailTab === 'attachments' ? (
+                        (issue.attachments ?? []).length === 0 ? (
+                          <p className="text-sm text-gray-400">还没有附件</p>
+                        ) : (
                           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                             {(issue.attachments ?? []).map((file) => {
                               const href = withKey(file.content_url)
@@ -965,28 +1115,303 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
                               )
                             })}
                           </div>
-                        </section>
+                        )
                       ) : null}
 
-                      {(issue.children ?? []).length > 0 ? (
-                        <section className="mb-6">
-                          <h3 className="mb-2 text-sm font-semibold text-gray-900">子单 ({issue.children?.length})</h3>
-                          <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200">
-                            {(issue.children ?? []).map((child) => (
-                              <li key={child.id}>
-                                <button type="button" className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50" onClick={() => onOpen?.(child.id)}>
-                                  <span className="mr-2 text-gray-400">{child.tracker?.name}</span>
-                                  <span className="text-gray-400">#{child.id}</span> {child.subject}
+                      {detailTab === 'children' ? (
+                        <div>
+                          <div className="mb-4 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                              onClick={() =>
+                                openCreate({
+                                  projectId: String(issue.project.id),
+                                  parentIssueId: String(issue.id),
+                                })
+                              }
+                            >
+                              <Plus className="h-4 w-4" />
+                              新建子单
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                              onClick={() => {
+                                setTemplateError(null)
+                                setTemplateForm({
+                                  name: '',
+                                  subject: '',
+                                  description: '',
+                                  tracker_id: String(trackers[0]?.id ?? ''),
+                                  priority_id: String(priorities.find((item) => item.name === '普通')?.id ?? priorities[0]?.id ?? ''),
+                                })
+                                setChildTool('template')
+                              }}
+                            >
+                              <Files className="h-4 w-4" />
+                              模板建子单
+                            </button>
+                            <button
+                              type="button"
+                              className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800"
+                              onClick={() => {
+                                setPickQuery('')
+                                setPickPage(0)
+                                setPickTotal(0)
+                                setPickSelected([])
+                                setPickError(null)
+                                setChildTool('pick')
+                              }}
+                            >
+                              <ListPlus className="h-4 w-4" />
+                              选择已有任务单
+                            </button>
+                          </div>
+                          {(issue.children ?? []).length === 0 ? (
+                            <p className="text-sm text-gray-400">还没有子单</p>
+                          ) : (
+                            <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200">
+                              {(issue.children ?? []).map((child) => (
+                                <li key={child.id}>
+                                  <button type="button" className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50" onClick={() => onOpen?.(child.id)}>
+                                    <span className="mr-2 text-gray-400">{child.tracker?.name}</span>
+                                    <span className="text-gray-400">#{child.id}</span> {child.subject}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      ) : null}
+
+                      <Dialog open={childTool === 'pick'} onClose={() => { if (!pickSaving) setChildTool(null) }} className="relative z-[60]">
+                        <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+                        <div className="fixed inset-0 flex items-center justify-center p-4">
+                          <DialogPanel className="flex max-h-[80vh] w-[min(640px,100%)] flex-col rounded-xl bg-white p-5 shadow-xl">
+                            <div className="flex items-start justify-between gap-3">
+                              <DialogTitle className="text-lg font-semibold text-gray-900">选择已有任务单</DialogTitle>
+                              <div className="flex shrink-0 items-center gap-2 pt-1 text-sm text-gray-500">
+                                <span>共 {pickTotal} 条</span>
+                                <button
+                                  type="button"
+                                  className="rounded px-1.5 py-0.5 text-gray-700 hover:bg-gray-100 disabled:text-gray-300"
+                                  disabled={pickPage <= 0 || pickLoading}
+                                  onClick={() => setPickPage((page) => Math.max(0, page - 1))}
+                                >
+                                  上一页
                                 </button>
-                              </li>
-                            ))}
-                          </ul>
-                        </section>
-                      ) : null}
+                                <span>
+                                  {pickPage + 1}/{Math.max(1, Math.ceil(pickTotal / PICK_PAGE_SIZE))}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="rounded px-1.5 py-0.5 text-gray-700 hover:bg-gray-100 disabled:text-gray-300"
+                                  disabled={pickLoading || (pickPage + 1) * PICK_PAGE_SIZE >= pickTotal}
+                                  onClick={() => setPickPage((page) => page + 1)}
+                                >
+                                  下一页
+                                </button>
+                              </div>
+                            </div>
+                            <p className="mt-1 text-sm text-gray-500">选中的工单会改挂到 #{issue.id} 下面。已经是本单子单、本单或本单父单的不会出现。</p>
+                            <Input
+                              className="mt-3"
+                              placeholder="搜索主题，或输入工单号"
+                              value={pickQuery}
+                              onChange={(e) => {
+                                setPickQuery(e.target.value)
+                                setPickPage(0)
+                              }}
+                            />
+                            <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-lg border border-gray-200">
+                              {pickLoading ? (
+                                <div className="flex justify-center py-8"><Spinner /></div>
+                              ) : pickIssues.length === 0 ? (
+                                <p className="px-3 py-6 text-sm text-gray-400">没有可添加的工单</p>
+                              ) : (
+                                <ul className="divide-y divide-gray-100">
+                                  {pickIssues.map((item) => {
+                                    const checked = pickSelected.includes(item.id)
+                                    return (
+                                      <li key={item.id}>
+                                        <label className="flex cursor-pointer items-start gap-2 px-3 py-2 text-sm hover:bg-gray-50">
+                                          <input
+                                            type="checkbox"
+                                            className="mt-1"
+                                            checked={checked}
+                                            onChange={() =>
+                                              setPickSelected((current) =>
+                                                checked ? current.filter((id) => id !== item.id) : [...current, item.id],
+                                              )
+                                            }
+                                          />
+                                          <span>
+                                            <span className="text-gray-400">{item.tracker?.name} #{item.id}</span> {item.subject}
+                                            <span className="ml-2 text-xs text-gray-400">{item.status?.name}</span>
+                                            {item.parent?.id ? <span className="ml-2 text-xs text-amber-600">当前父单 #{item.parent.id}</span> : null}
+                                          </span>
+                                        </label>
+                                      </li>
+                                    )
+                                  })}
+                                </ul>
+                              )}
+                            </div>
+                            {pickError ? <p className="mt-2 text-sm text-red-600">{pickError}</p> : null}
+                            <div className="mt-4 flex gap-2">
+                              <Button
+                                disabled={pickSaving || pickSelected.length === 0}
+                                onClick={() => {
+                                  if (!issueId) return
+                                  setPickSaving(true)
+                                  setPickError(null)
+                                  void (async () => {
+                                    const errors: string[] = []
+                                    for (const id of pickSelected) {
+                                      try {
+                                        await api(`/issues/${id}.json`, { method: 'PUT', body: { issue: { parent_issue_id: issueId } } })
+                                      } catch (err) {
+                                        errors.push(`#${id} ${err instanceof Error ? err.message : '添加失败'}`)
+                                      }
+                                    }
+                                    await load(issueId)
+                                    onUpdated?.()
+                                    setPickSaving(false)
+                                    if (errors.length) setPickError(errors.join('；'))
+                                    else {
+                                      flash('已添加为子单')
+                                      setChildTool(null)
+                                    }
+                                  })()
+                                }}
+                              >
+                                {pickSaving ? '添加中…' : `添加为子单${pickSelected.length ? `（${pickSelected.length}）` : ''}`}
+                              </Button>
+                              <Button variant="secondary" disabled={pickSaving} onClick={() => setChildTool(null)}>取消</Button>
+                            </div>
+                          </DialogPanel>
+                        </div>
+                      </Dialog>
 
-                      {(issue.relations ?? []).length > 0 ? (
-                        <section className="mb-6">
-                          <h3 className="mb-2 text-sm font-semibold text-gray-900">关联</h3>
+                      <Dialog open={childTool === 'template'} onClose={() => { if (!templateSaving) setChildTool(null) }} className="relative z-[60]">
+                        <div className="fixed inset-0 bg-black/30" aria-hidden="true" />
+                        <div className="fixed inset-0 flex items-center justify-center p-4">
+                          <DialogPanel className="max-h-[86vh] w-[min(720px,100%)] overflow-y-auto rounded-xl bg-white p-5 shadow-xl">
+                            <DialogTitle className="text-lg font-semibold text-gray-900">模板建子单</DialogTitle>
+                            <p className="mt-1 text-sm text-gray-500">选一个模板，会打开新建子单，并带上模板里的主题、描述、跟踪标签和优先级。</p>
+                            <div className="mt-3 rounded-lg border border-gray-200">
+                              {templatesLoading ? (
+                                <div className="flex justify-center py-6"><Spinner /></div>
+                              ) : templates.length === 0 ? (
+                                <p className="px-3 py-4 text-sm text-gray-400">这个项目还没有子单模板</p>
+                              ) : (
+                                <ul className="divide-y divide-gray-100">
+                                  {templates.map((template) => (
+                                    <li key={template.id} className="flex items-center gap-3 px-3 py-2 text-sm">
+                                      <div className="min-w-0 flex-1">
+                                        <div className="font-medium text-gray-900">{template.name}</div>
+                                        <div className="truncate text-gray-500">
+                                          {template.tracker_name} · {template.subject}
+                                        </div>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        className="text-blue-600 hover:text-blue-800"
+                                        onClick={() => {
+                                          setChildTool(null)
+                                          openCreate({
+                                            projectId: String(issue.project.id),
+                                            parentIssueId: String(issue.id),
+                                            preset: {
+                                              subject: template.subject,
+                                              description: template.description,
+                                              tracker_id: String(template.tracker_id),
+                                              priority_id: template.priority_id ? String(template.priority_id) : '',
+                                            },
+                                          })
+                                        }}
+                                      >
+                                        使用
+                                      </button>
+                                      <button
+                                        type="button"
+                                        className="text-red-600 hover:text-red-800"
+                                        onClick={() => {
+                                          void api(`/studio/issue_templates/${template.id}`, { method: 'DELETE' })
+                                            .then(() => setTemplates((current) => current.filter((item) => item.id !== template.id)))
+                                            .catch((err) => setTemplateError(err instanceof Error ? err.message : '删除失败'))
+                                        }}
+                                      >
+                                        删除
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                            <form
+                              className="mt-4 space-y-3 border-t border-gray-100 pt-4"
+                              onSubmit={(e) => {
+                                e.preventDefault()
+                                if (!issue.project?.id) return
+                                setTemplateSaving(true)
+                                setTemplateError(null)
+                                void api<{ template: IssueTemplateRow }>('/studio/issue_templates', {
+                                  method: 'POST',
+                                  body: {
+                                    project_id: issue.project.id,
+                                    name: templateForm.name,
+                                    subject: templateForm.subject,
+                                    description: templateForm.description,
+                                    tracker_id: templateForm.tracker_id,
+                                    priority_id: templateForm.priority_id || undefined,
+                                  },
+                                })
+                                  .then((res) => {
+                                    setTemplates((current) => [...current, res.template].sort((a, b) => a.name.localeCompare(b.name, 'zh')))
+                                    setTemplateForm({
+                                      name: '',
+                                      subject: '',
+                                      description: '',
+                                      tracker_id: templateForm.tracker_id,
+                                      priority_id: templateForm.priority_id,
+                                    })
+                                  })
+                                  .catch((err) => setTemplateError(err instanceof Error ? err.message : '保存失败'))
+                                  .finally(() => setTemplateSaving(false))
+                              }}
+                            >
+                              <div className="text-sm font-medium text-gray-900">新建模板</div>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <Input required placeholder="模板名称" value={templateForm.name} onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })} />
+                                <Input required placeholder="子单主题" value={templateForm.subject} onChange={(e) => setTemplateForm({ ...templateForm, subject: e.target.value })} />
+                                <Select value={templateForm.tracker_id} onChange={(e) => setTemplateForm({ ...templateForm, tracker_id: e.target.value })}>
+                                  {trackers.map((tracker) => (
+                                    <option key={tracker.id} value={tracker.id}>{tracker.name}</option>
+                                  ))}
+                                </Select>
+                                <Select value={templateForm.priority_id} onChange={(e) => setTemplateForm({ ...templateForm, priority_id: e.target.value })}>
+                                  {priorities.map((priority) => (
+                                    <option key={priority.id} value={priority.id}>{priority.name}</option>
+                                  ))}
+                                </Select>
+                              </div>
+                              <Textarea rows={3} placeholder="描述，可留空" value={templateForm.description} onChange={(e) => setTemplateForm({ ...templateForm, description: e.target.value })} />
+                              {templateError ? <p className="text-sm text-red-600">{templateError}</p> : null}
+                              <div className="flex gap-2">
+                                <Button type="submit" disabled={templateSaving}>{templateSaving ? '保存中…' : '保存模板'}</Button>
+                                <Button variant="secondary" onClick={() => setChildTool(null)}>关闭</Button>
+                              </div>
+                            </form>
+                          </DialogPanel>
+                        </div>
+                      </Dialog>
+
+                      {detailTab === 'relations' ? (
+                        (issue.relations ?? []).length === 0 ? (
+                          <p className="text-sm text-gray-400">还没有关联单</p>
+                        ) : (
                           <ul className="divide-y divide-gray-100 rounded-lg border border-gray-200">
                             {(issue.relations ?? []).map((relation) => {
                               const otherId = otherIssueId(relation, issue.id)
@@ -1000,64 +1425,95 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
                               )
                             })}
                           </ul>
-                        </section>
+                        )
                       ) : null}
 
-                      <section className="mb-6">
-                        <h3 className="mb-2 text-sm font-semibold text-gray-900">历史</h3>
-                        {(issue.journals ?? []).length === 0 ? <p className="text-sm text-gray-400">还没有更新记录</p> : null}
-                        <ol className="space-y-3">
-                          {[...(issue.journals ?? [])]
-                            .sort((a, b) => new Date(b.created_on).getTime() - new Date(a.created_on).getTime() || b.id - a.id)
-                            .map((journal) => (
-                            <li key={journal.id} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
-                              <div className="mb-1 text-xs text-gray-500">
-                                {journal.user?.name} · {new Date(journal.created_on).toLocaleString()}
-                              </div>
-                              {(journal.details ?? []).length > 0 ? (
-                                <ul className="mb-1 space-y-0.5 text-gray-700">
-                                  {(journal.details ?? []).map((detail, index) => (
-                                    <li key={`${journal.id}-${index}`}>
-                                      {changeLabel(detail)}：{showChange(detail, detail.old_value)} → {showChange(detail, detail.new_value)}
-                                    </li>
-                                  ))}
-                                </ul>
-                              ) : null}
-                              {journal.notes ? <RichText text={journal.notes} attachments={issue.attachments ?? []} onOpenImage={openPreviewByName} /> : null}
-                            </li>
-                          ))}
-                        </ol>
-                      </section>
+                      {detailTab === 'activity' ? (
+                        <>
+                          {issue.notes_addable === false ? (
+                            <p className="mb-4 text-sm text-gray-500">当前角色不能添加备注。</p>
+                          ) : (
+                            <Textarea
+                              className="mb-4"
+                              rows={3}
+                              value={note}
+                              placeholder="添加备注"
+                              onChange={(e) => setNote(e.target.value)}
+                              onBlur={() => {
+                                const text = note.trim()
+                                if (!text || !issueId || savingNote) return
+                                setSavingNote(true)
+                                void api(`/issues/${issueId}.json`, { method: 'PUT', body: { issue: { notes: text } } })
+                                  .then(async () => {
+                                    setNote('')
+                                    flash('已保存')
+                                    await load(issueId)
+                                    onUpdated?.()
+                                  })
+                                  .catch((err) => {
+                                    flash(err instanceof Error ? err.message : '保存失败')
+                                  })
+                                  .finally(() => setSavingNote(false))
+                              }}
+                            />
+                          )}
+                          {(issue.journals ?? []).length === 0 ? <p className="text-sm text-gray-400">还没有更新记录</p> : null}
+                          <ol className="space-y-3">
+                            {[...(issue.journals ?? [])]
+                              .sort((a, b) => new Date(b.created_on).getTime() - new Date(a.created_on).getTime() || b.id - a.id)
+                              .map((journal) => (
+                              <li key={journal.id} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-sm">
+                                <div className="mb-1 text-xs text-gray-500">
+                                  {journal.user?.name} · {new Date(journal.created_on).toLocaleString()}
+                                </div>
+                                {(journal.details ?? []).length > 0 ? (
+                                  <ul className="mb-1 space-y-0.5 text-gray-700">
+                                    {(journal.details ?? []).map((detail, index) => (
+                                      <li key={`${journal.id}-${index}`}>
+                                        {changeLabel(detail)}：{showChange(detail, detail.old_value)} → {showChange(detail, detail.new_value)}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : null}
+                                {journal.notes ? <RichText text={journal.notes} attachments={issue.attachments ?? []} onOpenImage={openPreviewByName} /> : null}
+                              </li>
+                            ))}
+                          </ol>
+                        </>
+                      ) : null}
 
-                      <section>
-                        <h3 className="mb-2 text-sm font-semibold text-gray-900">备注</h3>
-                        {issue.notes_addable === false ? (
-                          <p className="text-sm text-gray-500">当前角色不能添加备注。</p>
-                        ) : (
-                          <Textarea
-                            rows={3}
-                            value={note}
-                            placeholder="添加备注"
-                            onChange={(e) => setNote(e.target.value)}
-                            onBlur={() => {
-                              const text = note.trim()
-                              if (!text || !issueId || savingNote) return
-                              setSavingNote(true)
-                              void api(`/issues/${issueId}.json`, { method: 'PUT', body: { issue: { notes: text } } })
-                                .then(async () => {
-                                  setNote('')
-                                  flash('已保存')
-                                  await load(issueId)
-                                  onUpdated?.()
-                                })
-                                .catch((err) => {
-                                  flash(err instanceof Error ? err.message : '保存失败')
-                                })
-                                .finally(() => setSavingNote(false))
+                      {detailTab === 'watchers' ? (
+                        <div className="text-sm">
+                          <div className="mb-2 flex flex-wrap gap-1">
+                            {(issue.watchers ?? []).length === 0 ? <span className="text-sm text-gray-400">还没有跟踪者</span> : null}
+                            {(issue.watchers ?? []).map((user) => (
+                              <span key={user.id} className="inline-flex items-center gap-1 rounded-full bg-gray-50 px-2 py-0.5 text-xs text-gray-800 ring-1 ring-gray-200">
+                                {user.name}
+                                <button type="button" aria-label={`移除 ${user.name}`} className="text-gray-400 hover:text-gray-700" onClick={() => void removeWatcher(user.id)}>
+                                  <X className="h-3 w-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <Select
+                            className="!w-56"
+                            value=""
+                            onChange={(e) => {
+                              const userId = e.target.value
+                              if (userId) void addWatcher(userId)
                             }}
-                          />
-                        )}
-                      </section>
+                          >
+                            <option value="">添加跟踪者</option>
+                            {assignees
+                              .filter((user) => !(issue.watchers ?? []).some((watcher) => watcher.id === user.id))
+                              .map((user) => (
+                                <option key={user.id} value={user.id}>
+                                  {user.name}
+                                </option>
+                              ))}
+                          </Select>
+                        </div>
+                      ) : null}
                     </div>
                     <div
                       role="separator"
@@ -1232,37 +1688,6 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
                       <Field label="类别" value={dash(issue.category?.name)} />
                       <Field label="总工时" value={dash(issue.total_spent_hours ?? issue.spent_hours)} />
                       <Field label="作者" value={dash(issue.author?.name)} />
-                      <div className="py-1.5 text-sm">
-                        <div className="mb-1 text-gray-500">关注者</div>
-                        <div className="flex flex-wrap gap-1">
-                          {(issue.watchers ?? []).length === 0 ? <span className="text-xs text-gray-400">暂无</span> : null}
-                          {(issue.watchers ?? []).map((user) => (
-                            <span key={user.id} className="inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs text-gray-800 ring-1 ring-gray-200">
-                              {user.name}
-                              <button type="button" aria-label={`移除 ${user.name}`} className="text-gray-400 hover:text-gray-700" onClick={() => void removeWatcher(user.id)}>
-                                <X className="h-3 w-3" />
-                              </button>
-                            </span>
-                          ))}
-                        </div>
-                        <Select
-                          className="mt-2"
-                          value=""
-                          onChange={(e) => {
-                            const userId = e.target.value
-                            if (userId) void addWatcher(userId)
-                          }}
-                        >
-                          <option value="">添加关注者</option>
-                          {assignees
-                            .filter((user) => !(issue.watchers ?? []).some((watcher) => watcher.id === user.id))
-                            .map((user) => (
-                              <option key={user.id} value={user.id}>
-                                {user.name}
-                              </option>
-                            ))}
-                        </Select>
-                      </div>
                       <div className="mt-3 space-y-1 text-xs text-gray-400">
                         <div>创建于 {issue.created_on ? new Date(issue.created_on).toLocaleString() : '—'}</div>
                         <div>更新于 {issue.updated_on ? new Date(issue.updated_on).toLocaleString() : '—'}</div>
@@ -1287,11 +1712,14 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
       <div className="flex h-[calc(100vh-7.5rem)] min-h-[640px] flex-col overflow-hidden rounded-xl border border-gray-200 bg-white">
         {content}
         {lightbox}
+        {confirmDialog}
       </div>
     )
   }
 
   return (
+    <>
+    {confirmDialog}
     <Transition show={open} as={Fragment}>
       <Dialog
         className="relative z-40"
@@ -1329,5 +1757,6 @@ function startResize(event: ReactPointerEvent<HTMLDivElement>) {
         </div>
       </Dialog>
     </Transition>
+    </>
   )
 }
